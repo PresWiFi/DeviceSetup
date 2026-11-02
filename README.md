@@ -73,6 +73,11 @@ Flathub. On WSL, GUI apps are off by default (pass `--gui` to include them), and
 Desktop is installed on Windows the script uses its WSL integration instead of
 installing a second Docker Engine.
 
+On WSL with 1Password installed on Windows, the script also points git and `ssh` at
+1Password's SSH agent (through the Windows `ssh.exe`) and turns on commit signing with
+`op-ssh-sign-wsl.exe`, using the same signing key as Windows git. Skip it with
+`--skip 1password-ssh`.
+
 ## What gets installed
 
 | App | Windows | macOS | Linux |

@@ -454,6 +454,43 @@ run_script() { # run_script URL [interpreter] [args...]
   fetch "$url" "$TMPD/script.sh" && "$sh" "$TMPD/script.sh" "$@"
 }
 
+# ----- WSL: use 1Password's SSH agent from Windows -----
+# The agent only listens on a Windows named pipe, so git and ssh go through the
+# Windows ssh.exe, and commits are signed with 1Password's op-ssh-sign-wsl.exe.
+WIN_SSH=/mnt/c/Windows/System32/OpenSSH/ssh.exe
+OP_MARK="# DeviceSetup: 1Password SSH agent"
+win_run() { ( cd /mnt/c && "$@" 2>/dev/null | tr -d '\r' ); }  # Windows exes complain in Linux dirs
+op_sign_wsl() {
+  local la p
+  la=$(win_run /mnt/c/Windows/System32/cmd.exe /c 'echo %LOCALAPPDATA%')
+  [ -n "$la" ] && la=$(wslpath -u "$la") || return 1
+  for p in "$la/Microsoft/WindowsApps/op-ssh-sign-wsl.exe" "$la/1Password/app/8/op-ssh-sign-wsl.exe"; do
+    [ -e "$p" ] && { echo "$p"; return 0; }
+  done
+  return 1
+}
+op_agent_configured() {
+  [ "$(git config --global core.sshCommand)" = "$WIN_SSH" ] && grep -qF "$OP_MARK" "$HOME/.bashrc"
+}
+setup_op_agent_wsl() {
+  local signer key wingit="/mnt/c/Program Files/Git/cmd/git.exe"
+  signer=$(op_sign_wsl) || { echo "op-ssh-sign-wsl.exe not found"; return 1; }
+  # Sign with the same key as Windows git, else the agent's first key
+  [ -x "$wingit" ] && key=$(win_run "$wingit" config --global user.signingkey)
+  case "$key" in ssh-*) ;; *) key=$(win_run "${WIN_SSH%ssh.exe}ssh-add.exe" -L | head -n 1) ;; esac
+  case "$key" in ssh-*) ;; *) echo "1Password's SSH agent has no keys. Is 1Password running and unlocked?"; return 1 ;; esac
+  git config --global core.sshCommand "$WIN_SSH"
+  git config --global gpg.format ssh
+  git config --global gpg.ssh.program "$signer"
+  git config --global user.signingkey "$key"
+  git config --global commit.gpgsign true
+  touch "$HOME/.bashrc"
+  grep -qF "$OP_MARK" "$HOME/.bashrc" || printf '\n%s\nalias ssh=%s\nalias ssh-add=%s\n' \
+    "$OP_MARK" "$WIN_SSH" "${WIN_SSH%ssh.exe}ssh-add.exe" >> "$HOME/.bashrc"
+  note "1Password SSH agent: open a new shell for the ssh/ssh-add aliases. Test with: ssh -T git@github.com"
+  git config --global user.email >/dev/null || note "Set git user.name and user.email so signed commits show as Verified on GitHub."
+}
+
 linux_main() {
   detect_linux
   if [ "$(id -u)" = 0 ]; then
@@ -501,6 +538,11 @@ linux_main() {
   fi
   item tailscale "Tailscale"  "has tailscale"           "run_script https://tailscale.com/install.sh"
   item ollama    "Ollama"     "has ollama"              "run_script https://ollama.com/install.sh"
+
+  if [ "$IS_WSL" = 1 ] && op_sign_wsl >/dev/null; then
+    section "WSL integration"
+    item 1password-ssh "1Password SSH agent (Windows)" op_agent_configured setup_op_agent_wsl
+  fi
 
   section "Development and AI"
   item nvm       "nvm"        "[ -s \"\$HOME/.nvm/nvm.sh\" ]" "install_nvm"
